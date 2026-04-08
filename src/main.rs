@@ -73,6 +73,30 @@ fn canonicalize(html: &str, ignore_selectors: &[String]) -> String {
     lines.join("\n")
 }
 
+fn is_ignored(node: scraper::ElementRef, ignore_selectors: &[String], doc: &Html) -> bool {
+    ignore_selectors.iter().any(|s| {
+        scraper::Selector::parse(s)
+            .map(|sel| doc.select(&sel).any(|el| el == node))
+            .unwrap_or(false)
+    })
+}
+
+fn format_open_tag(node: scraper::ElementRef, indent: &str) -> String {
+    let tag = node.value().name();
+    let mut attrs: Vec<_> = node.value().attrs().collect();
+    attrs.sort_by(|a, b| a.0.cmp(b.0));
+    let attr_str = attrs
+        .iter()
+        .map(|(k, v)| format!("{}=\"{}\"", k, normalize_attr_value(v)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if attr_str.is_empty() {
+        format!("{}<{}>", indent, tag)
+    } else {
+        format!("{}<{} {}>", indent, tag, attr_str)
+    }
+}
+
 fn canonicalize_node(
     node: scraper::ElementRef,
     depth: usize,
@@ -80,35 +104,15 @@ fn canonicalize_node(
     ignore_selectors: &[String],
     doc: &Html,
 ) {
+    if is_ignored(node, ignore_selectors, doc) {
+        return;
+    }
+
     let indent = "  ".repeat(depth);
     let tag = node.value().name();
 
-    // Check if this element matches any ignore selector
-    for selector_str in ignore_selectors {
-        if let Ok(selector) = scraper::Selector::parse(selector_str) {
-            if doc.select(&selector).any(|el| el == node) {
-                return;
-            }
-        }
-    }
+    lines.push(format_open_tag(node, &indent));
 
-    // Build opening tag with sorted attributes
-    let mut attrs: Vec<_> = node.value().attrs().collect();
-    attrs.sort_by(|a, b| a.0.cmp(b.0));
-
-    let attr_str = attrs
-        .iter()
-        .map(|(k, v)| format!("{}=\"{}\"", k, normalize_attr_value(v)))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    if attr_str.is_empty() {
-        lines.push(format!("{}<{}>", indent, tag));
-    } else {
-        lines.push(format!("{}<{} {}>", indent, tag, attr_str));
-    }
-
-    // Process children
     for child in node.children() {
         match child.value() {
             Node::Element(_) => {
@@ -126,12 +130,11 @@ fn canonicalize_node(
         }
     }
 
-    // Closing tag (skip for void elements)
-    let void_elements = [
+    static VOID_ELEMENTS: &[&str] = &[
         "br", "hr", "img", "input", "link", "meta", "area", "base", "col", "embed", "param",
         "source", "track", "wbr",
     ];
-    if !void_elements.contains(&tag) {
+    if !VOID_ELEMENTS.contains(&tag) {
         lines.push(format!("{}</{}>", indent, tag));
     }
 }
